@@ -1,0 +1,107 @@
+name: CRCR scheduling
+on:
+  workflow_call:
+    inputs:
+      request_id:
+        required: true
+        type: string
+      generation:
+        required: true
+        type: string
+      deadline:
+        required: true
+        type: string
+      origin_attempt:
+        required: true
+        type: string
+      scheduling_version:
+        required: true
+        type: string
+      planning_label:
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+env:
+  SCHEDULING_VERSION: ${{ inputs.scheduling_version }}
+  REQUEST_ID: ${{ inputs.request_id }}
+  GENERATION: ${{ inputs.generation }}
+  DEADLINE: ${{ inputs.deadline }}
+  ORIGIN_ATTEMPT: ${{ inputs.origin_attempt }}
+jobs:
+  plan:
+    name: Plan
+    runs-on: [self-hosted, linux, '${{ inputs.planning_label }}']
+    timeout-minutes: 1440
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.plan.outputs.should_run }}
+      plan_id: ${{ steps.plan.outputs.plan_id }}
+      plan_digest: ${{ steps.plan.outputs.plan_digest }}
+      jobs_json: ${{ steps.plan.outputs.jobs_json }}
+      schedule_mode: ${{ steps.plan.outputs.schedule_mode }}
+      layer_0: ${{ steps.plan.outputs.layer_0 }}
+      layer_1: ${{ steps.plan.outputs.layer_1 }}
+      layer_2: ${{ steps.plan.outputs.layer_2 }}
+    steps:
+      - run: /opt/crcr/bin/crcrctl scheduling-version
+      - id: plan
+        run: /opt/crcr/bin/crcrctl prepare
+  prepare:
+    name: Prepare
+    needs: [plan]
+    if: ${{ always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.schedule_mode == 'layered' && needs.plan.outputs.layer_0 != '[]' }}
+    uses: ./.github/workflows/_crcr-run.yml
+    with:
+      request_id: ${{ inputs.request_id }}
+      generation: ${{ inputs.generation }}
+      deadline: ${{ inputs.deadline }}
+      origin_attempt: ${{ inputs.origin_attempt }}
+      plan_id: ${{ needs.plan.outputs.plan_id }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      scheduling_version: ${{ inputs.scheduling_version }}
+      jobs_json: ${{ needs.plan.outputs.layer_0 }}
+  build:
+    name: Build
+    needs: [plan, prepare]
+    if: ${{ always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.schedule_mode == 'layered' && needs.plan.outputs.layer_1 != '[]' }}
+    uses: ./.github/workflows/_crcr-run.yml
+    with:
+      request_id: ${{ inputs.request_id }}
+      generation: ${{ inputs.generation }}
+      deadline: ${{ inputs.deadline }}
+      origin_attempt: ${{ inputs.origin_attempt }}
+      plan_id: ${{ needs.plan.outputs.plan_id }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      scheduling_version: ${{ inputs.scheduling_version }}
+      jobs_json: ${{ needs.plan.outputs.layer_1 }}
+  test:
+    name: Test
+    needs: [plan, build]
+    if: ${{ always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.schedule_mode == 'layered' && needs.plan.outputs.layer_2 != '[]' }}
+    uses: ./.github/workflows/_crcr-run.yml
+    with:
+      request_id: ${{ inputs.request_id }}
+      generation: ${{ inputs.generation }}
+      deadline: ${{ inputs.deadline }}
+      origin_attempt: ${{ inputs.origin_attempt }}
+      plan_id: ${{ needs.plan.outputs.plan_id }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      scheduling_version: ${{ inputs.scheduling_version }}
+      jobs_json: ${{ needs.plan.outputs.layer_2 }}
+  whole_plan:
+    name: Compatibility
+    needs: [plan]
+    if: ${{ always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.schedule_mode == 'whole_plan' && needs.plan.outputs.should_run == 'true' }}
+    uses: ./.github/workflows/_crcr-run.yml
+    with:
+      request_id: ${{ inputs.request_id }}
+      generation: ${{ inputs.generation }}
+      deadline: ${{ inputs.deadline }}
+      origin_attempt: ${{ inputs.origin_attempt }}
+      plan_id: ${{ needs.plan.outputs.plan_id }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      scheduling_version: ${{ inputs.scheduling_version }}
+      jobs_json: ${{ needs.plan.outputs.jobs_json }}

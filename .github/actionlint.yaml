@@ -1,0 +1,5 @@
+self-hosted-runner:
+  labels:
+    - mlu-ci-control
+    - mlu-ci-monitor
+    - mlu-ci-plan

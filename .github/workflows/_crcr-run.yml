@@ -1,0 +1,117 @@
+name: CRCR monitors
+on:
+  workflow_call:
+    inputs:
+      request_id:
+        required: true
+        type: string
+      generation:
+        required: true
+        type: string
+      deadline:
+        required: true
+        type: string
+      origin_attempt:
+        required: true
+        type: string
+      plan_id:
+        required: true
+        type: string
+      plan_digest:
+        required: true
+        type: string
+      jobs_json:
+        required: true
+        type: string
+      scheduling_version:
+        required: true
+        type: string
+permissions:
+  contents: read
+env:
+  SCHEDULING_VERSION: ${{ inputs.scheduling_version }}
+  REQUEST_ID: ${{ inputs.request_id }}
+  GENERATION: ${{ inputs.generation }}
+  DEADLINE: ${{ inputs.deadline }}
+  ORIGIN_ATTEMPT: ${{ inputs.origin_attempt }}
+jobs:
+  monitor:
+    name: ${{ matrix.job.monitor_name || format('Monitor {0}', matrix.job.name) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(inputs.jobs_json) }}
+    runs-on: [self-hosted, linux, mlu-ci-monitor]
+    timeout-minutes: 1440
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PLAN_ID: ${{ inputs.plan_id }}
+      PLAN_DIGEST: ${{ inputs.plan_digest }}
+      JOB_ID: ${{ matrix.job.id }}
+    steps:
+      - name: Validate frozen plan and register readiness
+        id: ready
+        run: /opt/crcr/bin/crcrctl ready
+        env:
+          GITHUB_CHECK_RUN_ID: ${{ job.check_run_id }}
+      - name: Wait for real start or terminal without start
+        id: first
+        run: /opt/crcr/bin/crcrctl wait-first
+      - name: Persist start callback intent
+        if: ${{ steps.first.outputs.event_type == 'started' }}
+        id: start_intent
+        continue-on-error: true
+        run: /opt/crcr/bin/crcrctl receipt
+        env:
+          RECEIPT_STATE: attempted
+      - name: Report real start
+        if: ${{ !cancelled() && steps.start_intent.outcome == 'success' }}
+        id: start
+        continue-on-error: true
+        uses: ./.crcr-actions/callback
+        with:
+          status: in_progress
+          job-name: ${{ matrix.job.id }}
+      - name: Persist start callback outcome
+        if: ${{ always() && (steps.start.outcome == 'success' || steps.start.outcome == 'failure') }}
+        continue-on-error: true
+        run: /opt/crcr/bin/crcrctl receipt
+        env:
+          RECEIPT_STATE: ${{ steps.start.outcome == 'success' && 'confirmed' || 'uncertain' }}
+      - name: Collect real terminal even if start reporting failed
+        if: ${{ !cancelled() && steps.first.outputs.event_type == 'started' }}
+        id: terminal
+        run: /opt/crcr/bin/crcrctl wait-terminal
+      - name: Resolve audited terminal during failure or cancellation
+        id: finalize
+        if: ${{ always() && steps.ready.outcome == 'success' && steps.first.outputs.event_type == 'started' }}
+        timeout-minutes: 2
+        continue-on-error: true
+        run: /opt/crcr/bin/crcrctl finalize
+      - name: Persist terminal callback intent
+        if: ${{ always() && steps.finalize.outputs.should_complete == 'true' }}
+        id: terminal_intent
+        continue-on-error: true
+        run: /opt/crcr/bin/crcrctl receipt
+        env:
+          RECEIPT_STATE: attempted
+      - name: Report real completion
+        if: ${{ always() && steps.terminal_intent.outcome == 'success' }}
+        id: complete
+        continue-on-error: true
+        uses: ./.crcr-actions/callback
+        with:
+          status: completed
+          conclusion: ${{ steps.finalize.outputs.conclusion }}
+          job-name: ${{ matrix.job.id }}
+      - name: Persist terminal callback outcome
+        if: ${{ always() && (steps.complete.outcome == 'success' || steps.complete.outcome == 'failure') }}
+        continue-on-error: true
+        run: /opt/crcr/bin/crcrctl receipt
+        env:
+          RECEIPT_STATE: ${{ steps.complete.outcome == 'success' && 'confirmed' || 'uncertain' }}
+      - name: Align result and expose reporting limitations
+        if: ${{ always() && steps.ready.outcome == 'success' && steps.first.outcome == 'success' }}
+        run: /opt/crcr/bin/crcrctl finish

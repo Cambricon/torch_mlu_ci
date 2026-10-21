@@ -1,0 +1,43 @@
+name: CRCR CI
+on:
+  repository_dispatch:
+    types: [pull_request, push]
+permissions:
+  contents: read
+env:
+  SCHEDULING_VERSION: '2'
+jobs:
+  admit:
+    name: Admission
+    runs-on: [self-hosted, linux, mlu-ci-control]
+    timeout-minutes: 1440
+    outputs:
+      accepted: ${{ steps.admit.outputs.accepted }}
+      request_id: ${{ steps.admit.outputs.request_id }}
+      generation: ${{ steps.admit.outputs.generation }}
+      group_key: ${{ steps.admit.outputs.group_key }}
+      deadline: ${{ steps.admit.outputs.deadline }}
+      origin_attempt: ${{ steps.admit.outputs.origin_attempt }}
+      scheduling_version: ${{ steps.admit.outputs.scheduling_version }}
+      planning_label: ${{ steps.admit.outputs.planning_label }}
+    steps:
+      - run: /opt/crcr/bin/crcrctl scheduling-version
+      - id: admit
+        run: /opt/crcr/bin/crcrctl admit
+  execute:
+    needs: admit
+    if: ${{ needs.admit.outputs.accepted == 'true' }}
+    concurrency:
+      group: crcr-${{ needs.admit.outputs.group_key }}-${{ needs.admit.outputs.generation }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_crcr-schedule.yml
+    with:
+      request_id: ${{ needs.admit.outputs.request_id }}
+      generation: ${{ needs.admit.outputs.generation }}
+      deadline: ${{ needs.admit.outputs.deadline }}
+      origin_attempt: ${{ needs.admit.outputs.origin_attempt }}
+      scheduling_version: ${{ needs.admit.outputs.scheduling_version }}
+      planning_label: ${{ needs.admit.outputs.planning_label }}

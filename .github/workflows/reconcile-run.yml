@@ -1,0 +1,13 @@
+name: Reconcile CRCR run
+on:
+  workflow_run:
+    workflows: [CRCR CI]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  notify:
+    runs-on: [self-hosted, linux, mlu-ci-control]
+    timeout-minutes: 1440
+    steps:
+      - run: /opt/crcr/bin/crcrctl notify-run
